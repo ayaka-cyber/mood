@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>童谣情绪分析 · 识别图生成器</title>
+    <style>
+        /* 让页面在手机上显示更好 */
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(145deg, #f9f0f0 0%, #ffe6f0 100%);
+            min-height: 100vh;
+            text-align: center;
+        }
+        h1 {
+            font-size: 26px;
+            color: #5a3e4a;
+            margin-top: 0;
+            margin-bottom: 8px;
+        }
+        .sub {
+            color: #8c6a78;
+            margin-bottom: 24px;
+            font-size: 14px;
+        }
+        .button-group {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .button {
+            display: inline-block;
+            background: #ffaa88;
+            color: white;
+            border: none;
+            border-radius: 60px;
+            padding: 14px 28px;
+            font-size: 18px;
+            font-weight: bold;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            cursor: pointer;
+            transition: all 0.1s ease;
+        }
+        .button:active {
+            transform: scale(0.96);
+        }
+        .button.record {
+            background: #f56a6a;
+        }
+        .button.stop {
+            background: #6c8d8f;
+        }
+        .status {
+            margin: 20px auto;
+            padding: 18px;
+            background: white;
+            border-radius: 30px;
+            max-width: 90%;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            font-size: 16px;
+            color: #5a3e4a;
+            word-break: break-word;
+        }
+        .emotion-image {
+            margin: 20px auto;
+            max-width: 280px;
+            border-radius: 32px;
+            background: #fff0f4;
+            padding: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        .emotion-image img {
+            width: 100%;
+            height: auto;
+            border-radius: 24px;
+            display: block;
+        }
+        .tip {
+            font-size: 14px;
+            color: #b18898;
+            margin-top: 12px;
+            word-break: break-word;
+        }
+        .hidden {
+            display: none;
+        }
+        .footer {
+            margin-top: 30px;
+            font-size: 12px;
+            color: #bea6b2;
+        }
+        .loader {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #f56a6a;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-left: 8px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+<h1>🌙 月光光 · 情绪识别器</h1>
+<div class="sub">🎵 唱一段童谣，AI 会猜出你的心情 🎵</div>
+
+<!-- 录音控制按钮 -->
+<div class="button-group">
+    <button class="button record" id="startBtn">🎤 开始录音</button>
+    <button class="button stop" id="stopBtn" disabled>⏹️ 停止录音</button>
+</div>
+
+<!-- 状态提示区 -->
+<div class="status" id="status">
+    💡 点击“开始录音”，对着手机唱几句《月光光》～
+</div>
+
+<!-- 情绪识别图展示区（初始隐藏） -->
+<div class="emotion-image hidden" id="imageContainer">
+    <img id="emotionImg" src="" alt="情绪识别图">
+    <div class="tip" id="imageHint">✨ 请用 Kivicube 扫描上面的图片 ✨</div>
+</div>
+
+<div class="footer">
+    🌟 AI 情绪反馈 · 专为《月光光》童谣设计
+</div>
+
+<script>
+    // ==========  ⚠️ 这里需要你修改！ ⚠️  ==========
+    // 1. 替换成你在 ModelScope 获取的真实 API Key
+    const MODEL_SCOPE_API_KEY = "ms-5214583b-3831-4430-9b49-56ec2f611a01";
+    // 2. 选择要调用的模型名称 (SenseVoiceSmall)
+    const MODEL_NAME = "iic/SenseVoiceSmall";
+    // 3. 服务端点（一般不需要改，但如果官方有变动请留意）
+    const API_ENDPOINT = "https://api.modelscope.cn/v1/inference/iic/SenseVoiceSmall";
+    // ===========================================
+
+    // ---------- 录音相关变量 ----------
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let stream = null;
+
+    // DOM 元素
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusDiv = document.getElementById('status');
+    const imageContainer = document.getElementById('imageContainer');
+    const emotionImg = document.getElementById('emotionImg');
+    const imageHint = document.getElementById('imageHint');
+
+    // ---------- 情绪对应的图片 ----------
+    // 准备好 4 张图片（开心/平静/悲伤/有活力）
+    // ⚠️ 请将对应图片放在和 emotion.html 相同的目录下，或改成绝对路径
+    const emotionImages = {
+        HAPPY:   "./images/happy.png",
+        NEUTRAL: "./images/neutral.png",
+        SAD:     "./images/sad.png",
+        ANGRY:   "./images/angry.png"
+    };
+    // 如果没有准备全部图片，可以先保留默认地址，后续再补
+
+
+    // ---------- 情绪标签的中文映射 + 情绪对应的动画名称 ----------
+    function getEmotionInfo(emotionKey) {
+        const map = {
+            HAPPY:   { cn: "开心",  anim: "happy_effect",  message: "🎉 你的声音像快乐的小鸟！" },
+            SAD:     { cn: "温柔",  anim: "calm_effect",    message: "🌙 你的歌声像月光一样温柔～" },
+            ANGRY:   { cn: "有活力",anim: "excited_effect", message: "⚡ 很有力量哦！再试试轻轻唱？" },
+            NEUTRAL: { cn: "平静",  anim: "neutral_effect", message: "🌸 唱得很平稳，像潺潺的小溪～" }
+        };
+        return map[emotionKey] || map.NEUTRAL;
+    }
+
+    // 显示加载状态
+    function showLoading(message) {
+        statusDiv.innerHTML = message + '<div class="loader"></div>';
+    }
+
+    // 显示普通文案
+    function showStatus(text) {
+        statusDiv.innerHTML = text;
+    }
+
+    // ---------- 开始录音 ----------
+    startBtn.addEventListener('click', async () => {
+        try {
+            // 请求麦克风权限
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                // 录音停止后发送到 ModelScope API
+                sendAudioToAPI();
+            };
+
+            mediaRecorder.start();
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            showStatus("🎙️ 正在录音…… 唱完后点「停止录音」");
+        } catch (err) {
+            console.error(err);
+            showStatus("❌ 无法打开麦克风，请检查是否允许权限");
+        }
+    });
+
+    // ---------- 停止录音 ----------
+    stopBtn.addEventListener('click', () => {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            showLoading("🧠 AI 正在分析你的情绪……");
+        }
+    });
+
+    // ---------- ❤️ 核心：调用 ModelScope API 进行情绪识别 ❤️ ----------
+    async function sendAudioToAPI() {
+        // 检查 API Key 是否已配置
+        if (!MODEL_SCOPE_API_KEY || MODEL_SCOPE_API_KEY === "ms-5214583b-3831-4430-9b49-56ec2f611a01") {
+            showStatus("⚠️ 请先在第 1 步的代码里填入真实的 ModelScope API Key");
+            return;
+        }
+
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        const formData = new FormData();
+        // ⚠️ 字段名和 API 有关，SenseVoice 通常使用 file 或 input
+        formData.append('file', audioBlob, 'recording.webm');
+
+        try {
+            const response = await fetch(API_ENDPOINT, {
+                method: 'POST',
+                headers: {
+                    // 🔥 关键：ModelScope 认证头是 Bearer + API Key
+                    'Authorization': `Bearer ${MODEL_SCOPE_API_KEY}`,
+                    // 注意：不让浏览器自己设置 Content-Type，让 FormData 自动生成 boundary
+                },
+                body: formData
+            });
+
+            if (!response.ok) {
+                let errorDetail = '';
+                try {
+                    const errData = await response.json();
+                    errorDetail = errData.message || JSON.stringify(errData);
+                } catch (e) {
+                    errorDetail = await response.text();
+                }
+                throw new Error(`API 返回错误 ${response.status}: ${errorDetail}`);
+            }
+
+            const result = await response.json();
+            console.log("ModelScope 返回结果:", result);
+
+            // ---------- 解析情绪 ----------
+            // 根据 ModelScope SenseVoice 返回结构进行调整
+            let emotion = "NEUTRAL";
+            let rawText = "";
+
+            // 常见返回结构：result.data.text / result.output.text / result.text
+            if (result.output && result.output.text) {
+                rawText = result.output.text;
+            } else if (result.data && result.data.text) {
+                rawText = result.data.text;
+            } else if (result.text) {
+                rawText = result.text;
+            } else if (typeof result === 'string') {
+                rawText = result;
+            }
+
+            // SenseVoice 的情绪标记一般在文本方括号里
+            if (rawText.includes("[HAPPY]") || rawText.includes("HAPPY")) emotion = "HAPPY";
+            else if (rawText.includes("[SAD]") || rawText.includes("SAD")) emotion = "SAD";
+            else if (rawText.includes("[ANGRY]") || rawText.includes("ANGRY")) emotion = "ANGRY";
+            else if (rawText.includes("NEUTRAL")) emotion = "NEUTRAL";
+
+            const emotionInfo = getEmotionInfo(emotion);
+            const feedbackMsg = emotionInfo.message;
+
+            // 显示正常结果
+            showStatus(`✨ 检测到情绪：${emotionInfo.cn}！ ${feedbackMsg}`);
+            // 显示对应的识别图（如果图片地址不存在，就隐藏再显示）
+            emotionImg.src = emotionImages[emotion];
+            imageContainer.classList.remove('hidden');
+
+            if (!emotionImages[emotion] || emotionImages[emotion] === "") {
+                imageHint.innerText = "⚠️ 需要准备对应的情绪图片，可以先用彩色卡片代替测试～";
+            } else {
+                imageHint.innerText = `🌈 扫描上面的图片，进入「${emotionInfo.cn}」的 AR 世界！`;
+            }
+
+            // 如果可以触发动画（搭配AR场景时支持）：
+            if (typeof triggerARAnimation === 'function') {
+                triggerARAnimation(emotionInfo.anim);
+            }
+
+        } catch (error) {
+            console.error('❌ API调用失败:', error);
+            showStatus(`😢 网络开小差了，请检查网络后重试 (原因: ${error.message})`);
+            // 出错的时候可以选择不显示图片
+            imageContainer.classList.add('hidden');
+        }
+    }
+
+    // （可选）配合Kivicube的场景触发动画（如果你后续集成AR可以接入）
+    function triggerARAnimation(animName) {
+        if (window.Kivicube && typeof Kivicube.playAnimation === 'function') {
+            Kivicube.playAnimation(animName);
+        } else {
+            console.log(`🎬 (预览模式) 触发动画: ${animName}`);
+        }
+    }
+</script>
+</body>
+</html>
